@@ -101,7 +101,8 @@ menu = st.sidebar.radio(
      "⚡ Model Benchmark & Training", 
      "📁 Batch Flow Classifier", 
      "🚨 Threat Alert Logs", 
-     "🔍 Feature Analytics & Explainability"]
+     "🔍 Feature Analytics & Explainability",
+     "📖 System Documentation"]
 )
 
 # Shared quick train helper
@@ -163,7 +164,7 @@ if menu == "📊 SOC Overview & Live Monitor":
              "R2L (Password Guess Attack)", "U2R (Buffer Overflow Exploit)"]
         )
 
-        if st.button("🚀 Inject & Classify Flow", use_container_width=True):
+        if st.button("🚀 Inject & Classify Flow", width='stretch'):
             if "Normal" in sim_attack:
                 flow = {'duration': 1, 'protocol_type': 'tcp', 'service': 'http', 'flag': 'SF', 'src_bytes': 240, 'dst_bytes': 1500, 'count': 5, 'srv_count': 5, 'serror_rate': 0.0, 'rerror_rate': 0.0, 'num_failed_logins': 0, 'root_shell': 0}
             elif "DoS" in sim_attack:
@@ -227,7 +228,7 @@ elif menu == "⚡ Model Benchmark & Training":
         st.dataframe(
             summary_df.style.highlight_max(axis=0, subset=['Accuracy', 'Precision', 'Recall', 'F1-Score'], color='#1e3a8a')
             .highlight_min(axis=0, subset=['FPR', 'Latency (ms/sample)'], color='#065f46'),
-            use_container_width=True
+            width='stretch'
         )
 
         # Bar chart comparison
@@ -240,7 +241,7 @@ elif menu == "⚡ Model Benchmark & Training":
             color_discrete_sequence=['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6']
         )
         fig.update_layout(template="plotly_dark", yaxis_range=[0, 1.05])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
         st.subheader("🧩 Confusion Matrix Inspector")
         selected_model_name = st.selectbox("Choose Model for Confusion Matrix", [r['Model'] for r in evaluator.results_summary])
@@ -259,7 +260,7 @@ elif menu == "⚡ Model Benchmark & Training":
             title=f"Confusion Matrix: {selected_model_name}"
         )
         fig_cm.update_layout(template="plotly_dark")
-        st.plotly_chart(fig_cm, use_container_width=True)
+        st.plotly_chart(fig_cm, width='stretch')
 
 # ==========================================
 # 3. BATCH FILE CLASSIFIER
@@ -285,7 +286,7 @@ elif menu == "📁 Batch Flow Classifier":
 
     if df_to_score is not None:
         st.subheader("Dataset Preview")
-        st.dataframe(df_to_score.head(10), use_container_width=True)
+        st.dataframe(df_to_score.head(10), width='stretch')
 
         if st.button("⚡ Run Batch Classification Pipeline", type="primary"):
             with st.spinner("Classifying flows and logging threats..."):
@@ -307,10 +308,10 @@ elif menu == "📁 Batch Flow Classifier":
                     color_discrete_sequence=px.colors.qualitative.Set2
                 )
                 fig_pie.update_layout(template="plotly_dark")
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(fig_pie, width='stretch')
 
                 st.subheader("Scored Results Preview")
-                st.dataframe(scored_df[['protocol_type', 'service', 'src_bytes', 'dst_bytes', 'predicted_category', 'confidence']].head(20), use_container_width=True)
+                st.dataframe(scored_df[['protocol_type', 'service', 'src_bytes', 'dst_bytes', 'predicted_category', 'confidence']].head(20), width='stretch')
 
                 # Download link
                 csv_buffer = io.StringIO()
@@ -346,7 +347,7 @@ elif menu == "🚨 Threat Alert Logs":
         severities = st.multiselect("Filter by Severity", options=['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'], default=['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'])
         filtered_df = alerts_df[alerts_df['severity'].isin(severities)]
         
-        st.dataframe(filtered_df, use_container_width=True)
+        st.dataframe(filtered_df, width='stretch')
         
         # Download
         csv_alerts = filtered_df.to_csv(index=False)
@@ -378,7 +379,7 @@ elif menu == "🔍 Feature Analytics & Explainability":
         color_continuous_scale="Blues"
     )
     fig_imp.update_layout(template="plotly_dark", yaxis=dict(autorange="reversed"))
-    st.plotly_chart(fig_imp, use_container_width=True)
+    st.plotly_chart(fig_imp, width='stretch')
 
     st.subheader("🔥 Feature Correlation Heatmap")
     num_df = df.select_dtypes(include=[np.number])
@@ -391,7 +392,31 @@ elif menu == "🔍 Feature Analytics & Explainability":
         title="Numeric Feature Correlation Heatmap (Top 15)"
     )
     fig_corr.update_layout(template="plotly_dark")
-    st.plotly_chart(fig_corr, use_container_width=True)
+    st.plotly_chart(fig_corr, width='stretch')
     
     if dropped_features:
         st.warning(f"Redundant collinear features identified (>0.95 corr): {', '.join(dropped_features)}")
+
+# ==========================================
+# 6. SYSTEM DOCUMENTATION
+# ==========================================
+elif menu == "📖 System Documentation":
+    st.title("📖 System Documentation")
+    st.caption("Comprehensive system documentation and technical specifications")
+
+    tab1, tab2 = st.tabs(["📄 README", "📚 Project Documentation"])
+
+    with tab1:
+        if os.path.exists("README.md"):
+            with open("README.md", "r", encoding="utf-8") as f:
+                st.markdown(f.read())
+        else:
+            st.error("README.md file not found.")
+
+    with tab2:
+        if os.path.exists("PROJECT_DOCUMENTATION.md"):
+            with open("PROJECT_DOCUMENTATION.md", "r", encoding="utf-8") as f:
+                st.markdown(f.read())
+        else:
+            st.error("PROJECT_DOCUMENTATION.md file not found.")
+

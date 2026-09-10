@@ -46,3 +46,4 @@ network_ids/
 ├── requirements.txt
 └── README.md
 ```
+For more details, see `PROJECT_DOCUMENTATION.md`.
