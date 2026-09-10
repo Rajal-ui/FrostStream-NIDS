@@ -1,5 +1,7 @@
 # Network Intrusion Detection System (NIDS)
 
+> 📚 **Detailed Documentation:** Read the full [Project Documentation](PROJECT_DOCUMENTATION.md).
+
 A Machine Learning & Data Mining Network Intrusion Detection System (NIDS) designed to classify network traffic flows into **Normal**, **DoS**, **Probe**, **R2L**, and **U2R** categories.
 
 ## Features
@@ -46,4 +48,3 @@ network_ids/
 ├── requirements.txt
 └── README.md
 ```
-For more details, see `PROJECT_DOCUMENTATION.md`.
