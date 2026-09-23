@@ -222,10 +222,6 @@ def sp_run_nids_inference(session) -> str:
     import snowflake.snowpark  # noqa: F401
     from snowflake.snowpark.functions import col
 
-    model_dir = '/tmp/froststream_models'
-    _stage_files(session, model_dir)
-    artifacts = load_artifacts(model_dir)
-
     live = (
         session.table('CORE.FLOW_FEATURES')
         .filter(col('PROCESSED_FLAG') == False)  # noqa: E712
@@ -234,6 +230,10 @@ def sp_run_nids_inference(session) -> str:
     )
     if live.empty:
         return "scored=0 rows, alerts_raised=0, critical=0"
+
+    model_dir = '/tmp/froststream_models'
+    _stage_files(session, model_dir)
+    artifacts = load_artifacts(model_dir)
 
     flow_ids = live['FLOW_ID'].dropna().astype(str).tolist()
     scored = score_flows(live, artifacts=artifacts)

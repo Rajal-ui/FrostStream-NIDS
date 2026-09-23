@@ -104,8 +104,10 @@ CREATE TABLE IF NOT EXISTS FLOW_FEATURES (
     PRIMARY KEY (FLOW_ID)
 ) COMMENT = 'Flattened NSL-KDD compatible flow features ready for ML inference';
 
--- Index for efficient unprocessed record queries
-CREATE INDEX IF NOT EXISTS IDX_FLOW_FEATURES_UNPROCESSED ON FLOW_FEATURES(PROCESSED_FLAG, CREATED_AT);
+-- Snowflake does not support CREATE INDEX on standard tables (it is a hybrid-table feature).
+-- Use clustering keys instead: they let the query planner prune micro-partitions on the
+-- hottest read path (the unprocessed-batch poll in SP_RUN_NIDS_INFERENCE).
+ALTER TABLE FLOW_FEATURES CLUSTER BY (PROCESSED_FLAG, CREATED_AT);
 
 -- -----------------------------------------------------------------------------
 -- 3. NIDS_ALERTS: Alert store with mitigation tracking
@@ -130,10 +132,8 @@ CREATE TABLE IF NOT EXISTS NIDS_ALERTS (
     PRIMARY KEY (ALERT_ID)
 ) COMMENT = 'NIDS alert store with SOAR mitigation tracking';
 
--- Indexes for common query patterns
-CREATE INDEX IF NOT EXISTS IDX_NIDS_ALERTS_TIMESTAMP ON NIDS_ALERTS(TIMESTAMP DESC);
-CREATE INDEX IF NOT EXISTS IDX_NIDS_ALERTS_SEVERITY ON NIDS_ALERTS(SEVERITY, MITIGATION_STATUS);
-CREATE INDEX IF NOT EXISTS IDX_NIDS_ALERTS_SRC_IP ON NIDS_ALERTS(SRC_IP, TIMESTAMP DESC);
+-- Clustering key for SOAR triage / severity queries (replaces non-functional CREATE INDEX)
+ALTER TABLE NIDS_ALERTS CLUSTER BY (SEVERITY, MITIGATION_STATUS);
 
 -- -----------------------------------------------------------------------------
 -- 4. MODEL_REGISTRY: Tracks active ensemble & anomaly models
@@ -167,8 +167,8 @@ CREATE TABLE IF NOT EXISTS DRIFT_REPORTS (
     PRIMARY KEY (REPORT_ID)
 ) COMMENT = 'Hourly Population Stability Index drift monitoring reports';
 
--- Index for time-series queries
-CREATE INDEX IF NOT EXISTS IDX_DRIFT_REPORTS_TIMESTAMP ON DRIFT_REPORTS(CHECK_TIMESTAMP DESC);
+-- Clustering key for time-series drift report queries (replaces non-functional CREATE INDEX)
+ALTER TABLE DRIFT_REPORTS CLUSTER BY (CHECK_TIMESTAMP);
 
 -- -----------------------------------------------------------------------------
 -- Internal Stages for Model Artifacts & Snowpark Code
