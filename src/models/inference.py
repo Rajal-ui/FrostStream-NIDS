@@ -171,39 +171,51 @@ def _stage_files(session, model_dir: str) -> None:
             session.file.get(remote, model_dir)
 
 
+def _json_safe(value):
+    """Coerce any non-JSON-serializable cell (timestamps, numpy scalars, ...)
+    to a string so RAW_FEATURES can always be stored as a VARIANT."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    try:
+        return str(value)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _insert_alerts(session, alerts: pd.DataFrame) -> int:
-    rows = []
+    selects = []
     for _, row in alerts.iterrows():
         features = row.drop(
             labels=['predicted_category', 'confidence', 'anomaly_score', 'severity', 'is_zero_day_suspect', 'is_alert'],
             errors='ignore',
         ).to_dict()
-        raw_features = json.dumps({str(k): (v if v is not None else None) for k, v in features.items()}).replace("'", "''")
+        raw_features = json.dumps({str(k): _json_safe(v) for k, v in features.items()}).replace("'", "''")
         conf = f"{row['confidence']:.6f}"
         anomaly = f"{row['anomaly_score']:.6f}"
-        rows.append(
-            f"('{uuid.uuid4().hex}', "
-            f"'{row.get('flow_id', '')}', "
-            f"'{row.get('src_ip', '')}', "
-            f"'{row.get('dst_ip', '')}', "
-            f"{int(row.get('src_port') or 0)}, "
-            f"{int(row.get('dst_port') or 0)}, "
-            f"'{row['predicted_category']}', "
-            f"{conf}, "
-            f"{anomaly}, "
-            f"'{row['severity']}', "
-            f"{'TRUE' if row['is_zero_day_suspect'] else 'FALSE'}, "
-            f"'PENDING', "
-            f"PARSE_JSON('{raw_features}')::VARIANT)"
+        selects.append(
+            "SELECT "
+            f"'{uuid.uuid4().hex}' AS ALERT_ID, "
+            f"'{row.get('flow_id', '')}' AS FLOW_ID, "
+            f"'{row.get('src_ip', '')}' AS SRC_IP, "
+            f"'{row.get('dst_ip', '')}' AS DST_IP, "
+            f"{int(row.get('src_port') or 0)} AS SRC_PORT, "
+            f"{int(row.get('dst_port') or 0)} AS DST_PORT, "
+            f"'{row['predicted_category']}' AS ATTACK_TYPE, "
+            f"{conf} AS CONFIDENCE, "
+            f"{anomaly} AS ANOMALY_SCORE, "
+            f"'{row['severity']}' AS SEVERITY, "
+            f"{'TRUE' if row['is_zero_day_suspect'] else 'FALSE'} AS IS_ZERO_DAY_SUSPECT, "
+            f"'PENDING' AS MITIGATION_STATUS, "
+            f"PARSE_JSON('{raw_features}')::VARIANT AS RAW_FEATURES"
         )
-    if rows:
+    if selects:
         sql = (
             "INSERT INTO CORE.NIDS_ALERTS (ALERT_ID, FLOW_ID, SRC_IP, DST_IP, SRC_PORT, DST_PORT, "
             "ATTACK_TYPE, CONFIDENCE, ANOMALY_SCORE, SEVERITY, IS_ZERO_DAY_SUSPECT, MITIGATION_STATUS, RAW_FEATURES) "
-            f"VALUES {', '.join(rows)}"
+            + ' UNION ALL '.join(selects)
         )
         session.sql(sql).collect()
-    return len(rows)
+    return len(selects)
 
 
 def _mark_processed(session, flow_ids: list) -> int:
@@ -222,12 +234,13 @@ def sp_run_nids_inference(session) -> str:
     import snowflake.snowpark  # noqa: F401
     from snowflake.snowpark.functions import col
 
-    live = (
+    rows = (
         session.table('CORE.FLOW_FEATURES')
         .filter(col('PROCESSED_FLAG') == False)  # noqa: E712
         .limit(5000)
-        .to_pandas()
+        .collect()
     )
+    live = pd.DataFrame([row.as_dict() for row in rows])
     if live.empty:
         return "scored=0 rows, alerts_raised=0, critical=0"
 

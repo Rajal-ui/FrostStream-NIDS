@@ -70,6 +70,44 @@ def test_archive_contains_required_modules() -> None:
     assert not missing, f'archive missing handler modules: {missing}'
 
 
+def test_archive_has_no_package_shadowing() -> None:
+    """A module file must not collide with a same-named package directory
+    (e.g. src/models.py vs src/models/) or zipimport raises NotADirectoryError."""
+    archive = REPO_ROOT / '.cache' / 'snowpark_code.zip'
+    if not archive.exists():
+        from tools.deploy_snowpark_code import build_archive
+
+        build_archive(str(archive))
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+    packages = {
+        name for name in names
+        if name.endswith('/__init__.py') and not name.startswith('__pycache__')
+    }
+    for name in names:
+        if not name.endswith('.py'):
+            continue
+        stem, _ext = name.rsplit('.', 1)
+        assert stem + '/' not in packages, f'{name} shadows package {stem}/'
+
+
+def test_packaged_init_does_not_hardload_excluded_legacy_module() -> None:
+    """src/models/__init__.py must not unconditionally import the legacy
+    top-level src/models.py (excluded from the zip) or the SPROC bootstrap
+    fails with NotADirectoryError."""
+    archive = REPO_ROOT / '.cache' / 'snowpark_code.zip'
+    if not archive.exists():
+        from tools.deploy_snowpark_code import build_archive
+
+        build_archive(str(archive))
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        assert 'src/models.py' not in names
+        init_source = zf.read('src/models/__init__.py').decode('utf-8')
+    assert "'models.py'" in init_source or '"models.py"' in init_source
+    assert 'exists()' in init_source
+
+
 def test_external_function_declared_and_called_in_soar_task() -> None:
     assert re.search(r'EXTERNAL FUNCTION CORE\.EXTERNAL_MITIGATE_IP\(', PHASE3_SQL)
     assert re.search(r"AS 'https://<api-id>\.execute-api\.<region>\.amazonaws\.com/prod/mitigate'", PHASE3_SQL)

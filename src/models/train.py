@@ -241,13 +241,20 @@ def register_in_snowflake(out_dir: str, manifest: dict, session=None) -> str:
         ('preprocessor', manifest['version'], f"@CORE.MODEL_STAGE/{PREPROCESSOR_FILENAME}", 'PREPROCESSOR', 'NULL', 'TRUE'),
         ('baseline_distribution', manifest['version'], baseline_path, 'BASELINE_DISTRIBUTION', 'NULL', 'TRUE'),
     ]
+    selects = []
     for model_name, version, stage_path, model_type, metrics, active in registry_rows:
-        sql = (
-            f"INSERT INTO CORE.MODEL_REGISTRY (MODEL_NAME, VERSION, STAGE_PATH, MODEL_TYPE, TRAINING_METRICS, IS_ACTIVE) "
-            f"VALUES ('{model_name}', '{version}', '{stage_path}', '{model_type}', "
-            f"CASE WHEN '{metrics}' = 'NULL' THEN NULL ELSE PARSE_JSON($${metrics}$$)::VARIANT END, {active})"
+        metrics_sql = f"$${metrics}$$" if metrics != 'NULL' else 'NULL'
+        selects.append(
+            f"SELECT '{model_name}' AS MODEL_NAME, '{version}' AS VERSION, "
+            f"'{stage_path}' AS STAGE_PATH, '{model_type}' AS MODEL_TYPE, "
+            f"{metrics_sql}::VARIANT AS TRAINING_METRICS, {active} AS IS_ACTIVE"
         )
-        session.sql(sql).collect()
+    sql = (
+        "INSERT INTO CORE.MODEL_REGISTRY (MODEL_NAME, VERSION, STAGE_PATH, MODEL_TYPE, "
+        "TRAINING_METRICS, IS_ACTIVE) "
+        + ' UNION ALL '.join(selects)
+    )
+    session.sql(sql).collect()
     return f"uploaded staged artifacts and registered {len(registry_rows)} rows in MODEL_REGISTRY"
 
 

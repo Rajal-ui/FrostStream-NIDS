@@ -25,6 +25,14 @@ SKIP_DIRS = {'__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'}
 SKIP_SUFFIXES = ('.pyc', '.pyo')
 
 
+def _shadowed_by_package(base: str, rel: str) -> bool:
+    """True when a module file e.g. ``src/models.py`` would collide with a
+    same-named package directory ``src/models/`` (a zipimport ambiguity that
+    breaks ``from src.models.inference import ...`` at SPROC runtime)."""
+    stem, _ = os.path.splitext(rel)
+    return os.path.isdir(os.path.join(base, stem))
+
+
 def build_archive(out_path: str | None = None) -> str:
     """Zip ``src/`` and ``data/`` into a single archive on the D: drive (policy)."""
     out_path = out_path or DEFAULT_ARCHIVE
@@ -43,6 +51,8 @@ def build_archive(out_path: str | None = None) -> str:
                         continue
                     full = os.path.join(dirpath, filename)
                     rel = os.path.relpath(full, REPO_ROOT).replace(os.sep, '/')
+                    if _shadowed_by_package(REPO_ROOT, rel):
+                        continue
                     zf.write(full, rel)
 
     with open(out_path, 'wb') as fh:

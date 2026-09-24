@@ -140,10 +140,10 @@ def _escape_sql(value) -> str:
     return str(value).replace("'", "''")
 
 
-def sp_run_drift_monitor(session, threshold: float | None = None) -> str:
+def sp_run_drift_monitor(session) -> str:
     import snowflake.snowpark  # noqa: F401
 
-    threshold = DEFAULT_PSI_DRIFT_THRESHOLD if threshold is None else threshold
+    threshold = DEFAULT_PSI_DRIFT_THRESHOLD
     model_dir = '/tmp/froststream_models'
     os.makedirs(model_dir, exist_ok=True)
     try:
@@ -153,11 +153,12 @@ def sp_run_drift_monitor(session, threshold: float | None = None) -> str:
 
     baseline = load_baseline(model_dir=model_dir)
 
-    live = session.sql(
+    rows = session.sql(
         "SELECT * FROM CORE.FLOW_FEATURES "
         "WHERE CREATED_AT >= DATEADD(hour, -1, CURRENT_TIMESTAMP()) AND PROCESSED_FLAG = TRUE "
         "LIMIT 10000"
-    ).to_pandas()
+    ).collect()
+    live = pd.DataFrame([row.as_dict() for row in rows])
     if live.empty:
         return "drift monitor: no live flows in window, status=OK"
 
@@ -175,14 +176,15 @@ def sp_run_drift_monitor(session, threshold: float | None = None) -> str:
 
     sql = (
         "INSERT INTO CORE.DRIFT_REPORTS (REPORT_ID, WINDOW_START, WINDOW_END, MAX_PSI, "
-        "DRIFTED_FEATURES, FEATURE_PSI_DETAILS, STATUS) VALUES ("
+        "DRIFTED_FEATURES, FEATURE_PSI_DETAILS, STATUS) "
+        "SELECT "
         f"'{_escape_sql(report['report_id'])}', "
         f"TO_TIMESTAMP_NTZ('{_escape_sql(report['window_start'])}'), "
         f"TO_TIMESTAMP_NTZ('{_escape_sql(report['window_end'])}'), "
         f"{report['max_psi']}, "
         f"PARSE_JSON('{_escape_sql(drifted_json)}')::VARIANT, "
         f"PARSE_JSON('{_escape_sql(details_json)}')::VARIANT, "
-        f"'{report['status']}')"
+        f"'{report['status']}'"
     )
     session.sql(sql).collect()
 
