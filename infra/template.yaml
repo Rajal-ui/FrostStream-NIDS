@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  FrostStream NIDS Phase 5 - SOAR automated response & auto-expiry layer.
+  Deploys the mitigator Lambda (invoked via API Gateway by the Snowflake
+  external function CORE.EXTERNAL_MITIGATE_IP), the hourly cleanup Lambda
+  (EventBridge) that expires NACL deny rules, and the IAM role Snowflake's
+  API integration assumes to invoke the endpoint.
+
+Parameters:
+  TargetNaclId:
+    Type: String
+    Description: NACL FrostStream manages deny rules on (env TARGET_NACL_ID)
+  TargetVpcId:
+    Type: String
+    Description: VPC the target NACL belongs to (env TARGET_VPC_ID)
+  NaclRuleStart:
+    Type: Number
+    Default: 100
+    Description: First rule number FrostStream may allocate (env NACL_RULE_START)
+  NaclRuleEnd:
+    Type: Number
+    Default: 199
+    Description: Last rule number FrostStream may allocate (env NACL_RULE_END)
+  BlockTtlHours:
+    Type: Number
+    Default: 24
+    Description: Block auto-expiry TTL in hours (env BLOCK_TTL_HOURS)
+  SnowflakeAccount:
+    Type: String
+    Description: Snowflake account identifier for cleanup write-back
+  SnowflakeUser:
+    Type: String
+  SnowflakePassword:
+    Type: String
+    NoEcho: true
+  SnowflakeRole:
+    Type: String
+    Default: ACCOUNTADMIN
+  SnowflakeDatabase:
+    Type: String
+    Default: FROSTSTREAM_NIDS
+  SnowflakeSchema:
+    Type: String
+    Default: CORE
+  SnowflakeWarehouse:
+    Type: String
+    Default: NIDS_ANALYTICS_WH
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 60
+    MemorySize: 256
+    Tracing: Active
+
+Resources:
+  # -------------------------------------------------------------------------
+  # API Gateway (HTTP API) fronting the mitigator Lambda. Stage name 'prod'
+  # so the Snowflake external-function URL resolves to
+  #   https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate
+  # -------------------------------------------------------------------------
+  MitigatorHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: prod
+
+  MitigatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/soar/
+      Handler: mitigator.lambda_handler
+      Environment:
+        Variables:
+          TARGET_NACL_ID: !Ref TargetNaclId
+          TARGET_VPC_ID: !Ref TargetVpcId
+          NACL_RULE_START: !Ref NaclRuleStart
+          NACL_RULE_END: !Ref NaclRuleEnd
+          BLOCK_TTL_HOURS: !Ref BlockTtlHours
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeNetworkAcls
+                - ec2:CreateNetworkAclEntry
+                - ec2:CreateTags
+              Resource: '*'
+      Events:
+        Mitigate:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MitigatorHttpApi
+            Path: /mitigate
+            Method: POST
+
+  # -------------------------------------------------------------------------
+  # Cleanup Lambda (hourly EventBridge rule) + Snowflake write-back creds.
+  # -------------------------------------------------------------------------
+  CleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/soar/
+      Handler: cleanup.lambda_handler
+      Environment:
+        Variables:
+          TARGET_NACL_ID: !Ref TargetNaclId
+          TARGET_VPC_ID: !Ref TargetVpcId
+          NACL_RULE_START: !Ref NaclRuleStart
+          NACL_RULE_END: !Ref NaclRuleEnd
+          BLOCK_TTL_HOURS: !Ref BlockTtlHours
+          SNOWFLAKE_ACCOUNT: !Ref SnowflakeAccount
+          SNOWFLAKE_USER: !Ref SnowflakeUser
+          SNOWFLAKE_PASSWORD: !Ref SnowflakePassword
+          SNOWFLAKE_ROLE: !Ref SnowflakeRole
+          SNOWFLAKE_DATABASE: !Ref SnowflakeDatabase
+          SNOWFLAKE_SCHEMA: !Ref SnowflakeSchema
+          SNOWFLAKE_WAREHOUSE: !Ref SnowflakeWarehouse
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeNetworkAcls
+                - ec2:DeleteNetworkAclEntry
+                - ec2:DeleteTags
+              Resource: '*'
+      Events:
+        HourlyExpiry:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+            Enabled: true
+
+  # -------------------------------------------------------------------------
+  # IAM role assumed by Snowflake's SOAR_API_INTEGRATION (aws_api_gateway
+  # provider) to invoke the mitigator endpoint. The role ARN placeholder in
+  # snowflake_setup/03_snowpark_integration.sql must match this role.
+  # -------------------------------------------------------------------------
+  SnowflakeSOARFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SnowflakeSOARFunctionRole
+      Description: Lets Snowflake API Gateway integration invoke the mitigator API
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeMitigatorApi
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MitigatorHttpApi}/*'
+
+Outputs:
+  MitigatorApiUrl:
+    Description: External-function endpoint (fill into 03_snowpark_integration.sql)
+    Value: !Sub 'https://${MitigatorHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mitigate'
+  MitigatorFunctionArn:
+    Value: !GetAtt MitigatorFunction.Arn
+  CleanupFunctionArn:
+    Value: !GetAtt CleanupFunction.Arn
+  SnowflakeSOARRoleArn:
+    Value: !GetAtt SnowflakeSOARFunctionRole.Arn
