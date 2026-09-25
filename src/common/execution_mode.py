@@ -114,6 +114,14 @@ def _quote(value) -> str:
     return str(value if value is not None else '').replace("'", "''")
 
 
+def _sql_bool(value) -> str:
+    if value is None:
+        return 'FALSE'
+    if isinstance(value, str):
+        return 'TRUE' if value.strip().lower() in {'true', '1', 'yes'} else 'FALSE'
+    return 'TRUE' if bool(value) else 'FALSE'
+
+
 # --------------------------------------------------------------------------- #
 # FlowSink
 # --------------------------------------------------------------------------- #
@@ -301,7 +309,7 @@ class CloudAlertSink(AlertSink):
     COLUMNS = (
         'ALERT_ID', 'FLOW_ID', 'SRC_IP', 'DST_IP', 'SRC_PORT', 'DST_PORT',
         'ATTACK_TYPE', 'CONFIDENCE', 'ANOMALY_SCORE', 'SEVERITY',
-        'IS_ZERO_DAY_SUSPECT', 'MITIGATION_STATUS', 'RAW_FEATURES',
+        'IS_ZERO_DAY_SUSPECT', 'IS_SYNTHETIC', 'MITIGATION_STATUS', 'RAW_FEATURES',
     )
 
     def __init__(self, session=None):
@@ -332,6 +340,7 @@ class CloudAlertSink(AlertSink):
             f"{float(alert.get('anomaly_score') or 0.0)}, "
             f"'{_quote(alert.get('severity') or 'INFO')}', "
             f"{'TRUE' if alert.get('is_zero_day_suspect') else 'FALSE'}, "
+            f"{_sql_bool(alert.get('is_synthetic', alert.get('IS_SYNTHETIC', False)))}, "
             f"'{_quote(alert.get('mitigation_status') or 'PENDING')}', "
             f"PARSE_JSON('{raw}')::VARIANT"
         )

@@ -185,10 +185,13 @@ def test_cloud_alert_sink_row_select_escapes_safely():
         'attack_type': 'Probe',
         'confidence': 0.97,
         'severity': 'HIGH',
+        'is_synthetic': True,
     })
     assert select.startswith('SELECT ')
     assert "10.0.0.1''; DROP TABLE NIDS_ALERTS--" in select
     assert "10.0.0.1'; DROP TABLE NIDS_ALERTS--'" not in select
+    assert 'IS_SYNTHETIC' in CloudAlertSink.COLUMNS
+    assert ', TRUE, ' in select
 
 
 def test_alert_sink_resolves_by_mode():

@@ -29,6 +29,18 @@ SELECT 'NIDS_ALERTS_columns' AS check_name, COUNT(*) AS column_count
 FROM INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'CORE' AND TABLE_NAME = 'NIDS_ALERTS';
 
+SELECT 'FLOW_FEATURES_synthetic' AS check_name, IS_SYNTHETIC, COUNT(*) AS row_count
+FROM FLOW_FEATURES
+GROUP BY IS_SYNTHETIC
+ORDER BY IS_SYNTHETIC;
+
+SELECT 'NIDS_ALERTS_synthetic' AS check_name, IS_SYNTHETIC, COUNT(*) AS row_count
+FROM NIDS_ALERTS
+GROUP BY IS_SYNTHETIC
+ORDER BY IS_SYNTHETIC;
+
+SHOW VIEWS IN SCHEMA CORE;
+
 -- -----------------------------------------------------------------------------
 -- 3. Stages
 -- -----------------------------------------------------------------------------

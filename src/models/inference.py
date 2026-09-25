@@ -182,6 +182,19 @@ def _json_safe(value):
         return None
 
 
+def _sql_bool(value) -> str:
+    if value is None:
+        return 'FALSE'
+    if isinstance(value, str):
+        return 'TRUE' if value.strip().lower() in {'true', '1', 'yes'} else 'FALSE'
+    try:
+        if pd.isna(value):
+            return 'FALSE'
+    except (TypeError, ValueError):
+        pass
+    return 'TRUE' if bool(value) else 'FALSE'
+
+
 def _insert_alerts(session, alerts: pd.DataFrame) -> int:
     selects = []
     for _, row in alerts.iterrows():
@@ -205,13 +218,15 @@ def _insert_alerts(session, alerts: pd.DataFrame) -> int:
             f"{anomaly} AS ANOMALY_SCORE, "
             f"'{row['severity']}' AS SEVERITY, "
             f"{'TRUE' if row['is_zero_day_suspect'] else 'FALSE'} AS IS_ZERO_DAY_SUSPECT, "
+            f"{_sql_bool(row.get('is_synthetic', False))} AS IS_SYNTHETIC, "
             f"'PENDING' AS MITIGATION_STATUS, "
             f"PARSE_JSON('{raw_features}')::VARIANT AS RAW_FEATURES"
         )
     if selects:
         sql = (
             "INSERT INTO CORE.NIDS_ALERTS (ALERT_ID, FLOW_ID, SRC_IP, DST_IP, SRC_PORT, DST_PORT, "
-            "ATTACK_TYPE, CONFIDENCE, ANOMALY_SCORE, SEVERITY, IS_ZERO_DAY_SUSPECT, MITIGATION_STATUS, RAW_FEATURES) "
+            "ATTACK_TYPE, CONFIDENCE, ANOMALY_SCORE, SEVERITY, IS_ZERO_DAY_SUSPECT, IS_SYNTHETIC, "
+            "MITIGATION_STATUS, RAW_FEATURES) "
             + ' UNION ALL '.join(selects)
         )
         session.sql(sql).collect()

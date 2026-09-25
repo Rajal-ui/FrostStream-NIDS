@@ -115,6 +115,7 @@ def test_external_function_declared_and_called_in_soar_task() -> None:
     assert 'EXTERNAL_MITIGATE_IP(' in soar_task
     assert 'SYSTEM$STREAM_HAS_DATA' in soar_task
     assert "MITIGATION_STATUS = 'PENDING'" in soar_task
+    assert 'AND IS_SYNTHETIC = FALSE' in soar_task
 
 
 def test_orchestration_task_wiring() -> None:

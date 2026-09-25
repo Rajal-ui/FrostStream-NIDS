@@ -98,7 +98,7 @@ CREATE OR REPLACE TASK FLATTEN_FLOW_TASK
     DST_HOST_SAME_SRC_PORT_RATE, DST_HOST_SRV_DIFF_HOST_RATE,
     DST_HOST_SERROR_RATE, DST_HOST_SRV_SERROR_RATE, DST_HOST_RERROR_RATE,
     DST_HOST_SRV_RERROR_RATE,
-    PROCESSED_FLAG, CREATED_AT
+    IS_SYNTHETIC, PROCESSED_FLAG, CREATED_AT
   )
   SELECT
     -- Generate deterministic FLOW_ID from 5-tuple + timestamp (fall back to raw file identity)
@@ -161,6 +161,9 @@ CREATE OR REPLACE TASK FLATTEN_FLOW_TASK
     COALESCE(src_record:dst_host_srv_serror_rate::FLOAT, 0.0) AS DST_HOST_SRV_SERROR_RATE,
     COALESCE(src_record:dst_host_rerror_rate::FLOAT, 0.0) AS DST_HOST_RERROR_RATE,
     COALESCE(src_record:dst_host_srv_rerror_rate::FLOAT, 0.0) AS DST_HOST_SRV_RERROR_RATE,
+
+    COALESCE(FILE_NAME ILIKE 'flows/smoke_%', FALSE)
+      OR COALESCE(src_record:flow_id::VARCHAR ILIKE 'smoke-%', FALSE) AS IS_SYNTHETIC,
     
     FALSE AS PROCESSED_FLAG,
     CURRENT_TIMESTAMP() AS CREATED_AT
@@ -172,6 +175,7 @@ CREATE OR REPLACE TASK FLATTEN_FLOW_TASK
     -- flatten on PATH => 'records' with OUTER => TRUE to keep exactly one row per record.
     SELECT
       RAW_ID,
+      FILE_NAME,
       COALESCE(f.value, RECORD_CONTENT) AS src_record,
       f.index AS flow_index
     FROM RAW_FLOW_STREAM,

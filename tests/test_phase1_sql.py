@@ -65,6 +65,15 @@ def test_flatten_handles_object_records_without_per_key_explosion() -> None:
     assert 'OUTER => TRUE' in SNOWPIPE_SQL
 
 
+def test_synthetic_marker_and_live_views_are_wired() -> None:
+    assert 'IS_SYNTHETIC BOOLEAN NOT NULL DEFAULT FALSE' in TABLES_SQL
+    assert "FILE_NAME ILIKE 'flows/smoke_%'" in SNOWPIPE_SQL
+    assert "src_record:flow_id::VARCHAR ILIKE 'smoke-%'" in SNOWPIPE_SQL
+    assert 'CREATE OR REPLACE VIEW LIVE_FLOW_FEATURES AS' in TABLES_SQL
+    assert 'CREATE OR REPLACE VIEW LIVE_NIDS_ALERTS AS' in TABLES_SQL
+    assert TABLES_SQL.count('WHERE IS_SYNTHETIC = FALSE') >= 2
+
+
 def test_inference_alert_columns_exist_in_nids_alerts() -> None:
     inference = (REPO_ROOT / 'src' / 'models' / 'inference.py').read_text(encoding='utf-8')
     match = re.search(

@@ -49,7 +49,7 @@ LIST @CORE.MODEL_STAGE;                           -- expect 4 .joblib/.json file
 -- CALL CORE.SP_RUN_DRIFT_MONITOR();
 --
 -- End-to-end check after a synthetic attack replay:
---   SELECT SEVERITY, MITIGATION_STATUS, COUNT(*) FROM CORE.NIDS_ALERTS GROUP BY 1, 2;
+--   SELECT SEVERITY, MITIGATION_STATUS, COUNT(*) FROM CORE.LIVE_NIDS_ALERTS GROUP BY 1, 2;
 
 -- =============================================================================
 -- End of verify_phase3.sql

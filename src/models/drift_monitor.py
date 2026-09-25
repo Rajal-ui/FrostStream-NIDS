@@ -156,6 +156,7 @@ def sp_run_drift_monitor(session) -> str:
     rows = session.sql(
         "SELECT * FROM CORE.FLOW_FEATURES "
         "WHERE CREATED_AT >= DATEADD(hour, -1, CURRENT_TIMESTAMP()) AND PROCESSED_FLAG = TRUE "
+        "AND IS_SYNTHETIC = FALSE "
         "LIMIT 10000"
     ).collect()
     live = pd.DataFrame([row.as_dict() for row in rows])
@@ -191,8 +192,8 @@ def sp_run_drift_monitor(session) -> str:
     if report['status'] == 'ALERT':
         alert_sql = (
             "INSERT INTO CORE.NIDS_ALERTS (ALERT_ID, SRC_IP, DST_IP, ATTACK_TYPE, CONFIDENCE, SEVERITY, "
-            "IS_ZERO_DAY_SUSPECT, MITIGATION_STATUS) VALUES ("
-            f"'{uuid.uuid4().hex}', '0.0.0.0', '0.0.0.0', 'MODEL_DRIFT_ALERT', 1.0, 'HIGH', FALSE, 'PENDING')"
+            "IS_ZERO_DAY_SUSPECT, IS_SYNTHETIC, MITIGATION_STATUS) VALUES ("
+            f"'{uuid.uuid4().hex}', '0.0.0.0', '0.0.0.0', 'MODEL_DRIFT_ALERT', 1.0, 'HIGH', FALSE, FALSE, 'PENDING')"
         )
         session.sql(alert_sql).collect()
 
