@@ -32,6 +32,7 @@ TOKEN_MAP = {
     '<region>': 'AWS_DEFAULT_REGION',
     '<AWS_INGEST_ACCESS_KEY_ID>': 'AWS_INGEST_ACCESS_KEY_ID',
     '<AWS_INGEST_SECRET_ACCESS_KEY>': 'AWS_INGEST_SECRET_ACCESS_KEY',
+    '<api-id>': 'SOAR_API_ID',  # Phase 5: SOAR API Gateway ID from SAM stack output
 }
 
 SECRET_ENV_KEYS = (

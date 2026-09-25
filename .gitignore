@@ -62,4 +62,10 @@ snowflake.yml
 *.log
 logs/
 
+# Local scratch and generated artifacts
+scratch/
+infra/.aws-sam/
+*.bak
+*.corrupted
+
 docs/

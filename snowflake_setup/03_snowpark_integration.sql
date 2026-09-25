@@ -1,7 +1,7 @@
 -- =============================================================================
 -- FrostStream NIDS - Phase 3: Snowpark Registration & Orchestration
 --   * Stored Procedures  : SP_RUN_NIDS_INFERENCE, SP_RUN_DRIFT_MONITOR
---   * External Function   : EXTERNAL_MITIGATE_IP (SOAR API Gateway bridge)
+--   * SOAR UDF            : EXTERNAL_MITIGATE_IP (External Network Access -> API Gateway)
 --   * Orchestration Tasks : INFERENCE_TASK, DRIFT_MONITOR_TASK, SOAR_DISPATCH_TASK
 --   * CDC Stream          : NIDS_ALERTS_STREAM
 --
@@ -52,22 +52,28 @@ CREATE OR REPLACE PROCEDURE CORE.SP_RUN_DRIFT_MONITOR()
   COMMENT = 'Hourly Population Stability Index (PSI) drift detection vs MODEL_REGISTRY baseline';
 
 -- -----------------------------------------------------------------------------
--- 3. SOAR API Integration (Snowflake -> API Gateway -> mitigator Lambda)
---    NOTE: <AWS_ACCOUNT_ID>, <api-id> and <region> are placeholders; replace
---    them before deployment. The IAM role must exist in AWS (Phase 5).
+-- 3. SOAR External Function (Snowflake -> API Gateway -> mitigator Lambda)
+--    NOTE: <AWS_ACCOUNT_ID> and <region> are substituted automatically from
+--    .env by tools/deploy_cloud.py. <api-id> MUST be replaced manually with
+--    the MitigatorHttpApi id (from `sam deploy` output MitigatorApiUrl) before
+--    deploying with --enable-soar. The IAM role must exist in AWS (Phase 5).
 --
---    This whole section is wrapped in markers so the deploy runner skips it
---    until Phase 5 infra is live:
---      tools/deploy_cloud.py --phase 3            # SOAR omitted (default)
---      tools/deploy_cloud.py --phase 3 --enable-soar   # SOAR included
+--    NOTE: External Network Access (UDF) is not available on trial accounts.
+--    This uses External Function which requires cross-account IAM AssumeRole.
+--    If blocked by SCP, the AWS admin must whitelist Snowflake's principal:
+--    arn:aws:iam::291216788687:user/58892000-s
 -- -----------------------------------------------------------------------------
 -- [SOAR_API_START]
-CREATE OR REPLACE API INTEGRATION SOAR_API_INTEGRATION
+-- API Integration (idempotent - doesn't regenerate ExternalId on update)
+CREATE API INTEGRATION IF NOT EXISTS SOAR_API_INTEGRATION
   API_PROVIDER = aws_api_gateway
   API_AWS_ROLE_ARN = 'arn:aws:iam::<AWS_ACCOUNT_ID>:role/SnowflakeSOARFunctionRole'
   API_ALLOWED_PREFIXES = ('https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate')
   ENABLED = TRUE
   COMMENT = 'Enables Snowflake external function calls to the Phase 5 mitigator Lambda';
+
+-- Update allowed prefixes if the integration already exists (URL change)
+ALTER API INTEGRATION SOAR_API_INTEGRATION SET API_ALLOWED_PREFIXES = ('https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate');
 
 -- External function used by SOAR_DISPATCH_TASK to block a hostile source IP.
 CREATE OR REPLACE EXTERNAL FUNCTION CORE.EXTERNAL_MITIGATE_IP(
@@ -77,9 +83,8 @@ CREATE OR REPLACE EXTERNAL FUNCTION CORE.EXTERNAL_MITIGATE_IP(
   , ATTACK_TYPE VARCHAR
 )
   RETURNS VARIANT
-  API_INTEGRATION = CORE.SOAR_API_INTEGRATION
-  AS 'https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate'
-  COMMENT = 'Invokes the mitigator Lambda; returns {"status":"ACTIONED|SUPPRESSED|FAILED","src_ip":...}';
+  API_INTEGRATION = SOAR_API_INTEGRATION
+  AS 'https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate';
 -- [SOAR_API_END]
 
 -- -----------------------------------------------------------------------------
@@ -126,8 +131,8 @@ ALTER TASK DRIFT_MONITOR_TASK RESUME;
 CREATE OR REPLACE TASK CORE.SOAR_DISPATCH_TASK
   WAREHOUSE = NIDS_ANALYTICS_WH
   SCHEDULE = '1 MINUTE'
-  WHEN SYSTEM$STREAM_HAS_DATA('CORE.NIDS_ALERTS_STREAM')
   COMMENT = 'Dispatches qualifying alerts to the SOAR mitigator and records the outcome'
+  WHEN SYSTEM$STREAM_HAS_DATA('CORE.NIDS_ALERTS_STREAM')
 AS
   MERGE INTO CORE.NIDS_ALERTS AS a
   USING (
@@ -161,7 +166,7 @@ AS
 -- 3. Smoke test (after models exist on MODEL_STAGE):
 --      CALL CORE.SP_RUN_NIDS_INFERENCE();
 --      CALL CORE.SP_RUN_DRIFT_MONITOR();
--- 4. Once Phase 5 (API Gateway + Lambda) is deployed, replace the placeholders
---    above, re-run this file, then:
+-- 4. Once Phase 5 (API Gateway + Lambda) is deployed, replace <api-id> and <region>
+--    placeholders above, re-run this file with --enable-soar, then:
 --      ALTER TASK SOAR_DISPATCH_TASK RESUME;
 -- =============================================================================

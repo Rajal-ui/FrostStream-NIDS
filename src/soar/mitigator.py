@@ -16,7 +16,7 @@ Guardrails (defense in depth - the SQL already filters, this re-validates):
 
 import json
 
-from . import nacl
+import nacl
 
 
 def _parse_value(row, index):

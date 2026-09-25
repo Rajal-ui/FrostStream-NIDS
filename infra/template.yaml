@@ -46,6 +46,12 @@ Parameters:
   SnowflakeWarehouse:
     Type: String
     Default: NIDS_ANALYTICS_WH
+  SnowflakeIamUserArn:
+    Type: String
+    Description: Snowflake API integration IAM user (see DESCRIBE API INTEGRATION -> API_AWS_IAM_USER_ARN)
+  SnowflakeExternalId:
+    Type: String
+    Description: Snowflake API integration external id (see DESCRIBE API INTEGRATION -> API_AWS_EXTERNAL_ID)
 
 Globals:
   Function:
@@ -56,14 +62,16 @@ Globals:
 
 Resources:
   # -------------------------------------------------------------------------
-  # API Gateway (HTTP API) fronting the mitigator Lambda. Stage name 'prod'
+  # API Gateway (REST API) fronting the mitigator Lambda. Stage name 'prod'
   # so the Snowflake external-function URL resolves to
   #   https://<api-id>.execute-api.<region>.amazonaws.com/prod/mitigate
   # -------------------------------------------------------------------------
-  MitigatorHttpApi:
-    Type: AWS::Serverless::HttpApi
+  MitigatorRestApi:
+    Type: AWS::Serverless::Api
     Properties:
       StageName: prod
+      Auth:
+        DefaultAuthorizer: AWS_IAM
 
   MitigatorFunction:
     Type: AWS::Serverless::Function
@@ -88,9 +96,9 @@ Resources:
               Resource: '*'
       Events:
         Mitigate:
-          Type: HttpApi
+          Type: Api
           Properties:
-            ApiId: !Ref MitigatorHttpApi
+            RestApiId: !Ref MitigatorRestApi
             Path: /mitigate
             Method: POST
 
@@ -141,14 +149,17 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: SnowflakeSOARFunctionRole
-      Description: Lets Snowflake API Gateway integration invoke the mitigator API
+      Description: Lets Snowflake API integration assume this role to invoke the mitigator API
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              Service: apigateway.amazonaws.com
+              AWS: !Ref SnowflakeIamUserArn
             Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Ref SnowflakeExternalId
       Policies:
         - PolicyName: InvokeMitigatorApi
           PolicyDocument:
@@ -156,12 +167,12 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: execute-api:Invoke
-                Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MitigatorHttpApi}/*'
+                Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MitigatorRestApi}/*'
 
 Outputs:
   MitigatorApiUrl:
     Description: External-function endpoint (fill into 03_snowpark_integration.sql)
-    Value: !Sub 'https://${MitigatorHttpApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mitigate'
+    Value: !Sub 'https://${MitigatorRestApi}.execute-api.${AWS::Region}.amazonaws.com/prod/mitigate'
   MitigatorFunctionArn:
     Value: !GetAtt MitigatorFunction.Arn
   CleanupFunctionArn:

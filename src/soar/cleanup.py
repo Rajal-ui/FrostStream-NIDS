@@ -9,7 +9,7 @@ Snowflake ``CORE.NIDS_ALERTS`` table.
 import json
 import time
 
-from . import nacl
+import nacl
 
 
 def list_expired(acl: dict, now: int = None) -> list[tuple[str, int, dict]]:

@@ -181,6 +181,7 @@ class FlowFeatureExtractor:
         self.active_timeout = active_timeout
         self._flows: dict[FlowKey, FlowAccumulator] = {}
         self._window: deque = deque()
+        self._host_window: deque = deque()
 
     def ingest(self, packet: dict, ts: float | None = None) -> list[dict]:
         """Feed one packet; returns any flows that expired as a result."""
@@ -245,18 +246,42 @@ class FlowFeatureExtractor:
             'diff_srv_rate': round(1.0 - (srv_count / max(1, count)), 6),
         }
 
-    def _dst_host_rates(self, dst_ip: str, service: str) -> dict:
+    def _dst_host_rates(self, acc: FlowAccumulator, now: float) -> dict:
+        cutoff = now - CONN_WINDOW_SEC
+        while self._host_window and self._host_window[0][0] < cutoff:
+            self._host_window.popleft()
+        self._host_window.append((
+            now,
+            acc.dst_ip,
+            acc.service,
+            acc.src_ip,
+            acc.src_port,
+            acc.syn_error,
+            acc.saw_rst,
+        ))
+        host_flows = [w for w in self._host_window if w[1] == acc.dst_ip][-DST_HOST_WINDOW_SIZE:]
+        srv_flows = [w for w in host_flows if w[2] == acc.service]
+        same_src_port = [w for w in host_flows if w[4] == acc.src_port]
+        diff_host = [w for w in srv_flows if w[3] != acc.src_ip]
+
+        def rate(pool, index):
+            if not pool:
+                return 0.0
+            return round(sum(1 for w in pool if w[index]) / len(pool), 6)
+
+        host_count = max(1, len(host_flows))
+        srv_count = max(1, len(srv_flows))
         return {
-            'dst_host_count': DST_HOST_WINDOW_SIZE,
-            'dst_host_srv_count': DST_HOST_WINDOW_SIZE,
-            'dst_host_same_srv_rate': 1.0,
-            'dst_host_diff_srv_rate': 0.0,
-            'dst_host_same_src_port_rate': 0.0,
-            'dst_host_srv_diff_host_rate': 0.0,
-            'dst_host_serror_rate': 0.0,
-            'dst_host_srv_serror_rate': 0.0,
-            'dst_host_rerror_rate': 0.0,
-            'dst_host_srv_rerror_rate': 0.0,
+            'dst_host_count': host_count,
+            'dst_host_srv_count': srv_count,
+            'dst_host_same_srv_rate': round(len(srv_flows) / host_count, 6),
+            'dst_host_diff_srv_rate': round(1.0 - (len(srv_flows) / host_count), 6),
+            'dst_host_same_src_port_rate': round(len(same_src_port) / host_count, 6),
+            'dst_host_srv_diff_host_rate': round(len(diff_host) / srv_count, 6),
+            'dst_host_serror_rate': rate(host_flows, 5),
+            'dst_host_srv_serror_rate': rate(srv_flows, 5),
+            'dst_host_rerror_rate': rate(host_flows, 6),
+            'dst_host_srv_rerror_rate': rate(srv_flows, 6),
         }
 
     def _emit(self, acc: FlowAccumulator, now: float) -> dict:
@@ -284,7 +309,7 @@ class FlowFeatureExtractor:
         }
         record.update(acc_rates)
         record.update(CONTENT_DEFAULTS)
-        record.update(self._dst_host_rates(acc.dst_ip, acc.service))
+        record.update(self._dst_host_rates(acc, now))
         return record
 
 
