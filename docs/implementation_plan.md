@@ -446,16 +446,22 @@ d:/Projects/FrostStream NIDS/
 
 ### Phase 7: CI/CD Git-to-Deploy Automation
 
-#### [PENDING] [.github/workflows/deploy.yml](file:///d:/Projects/FrostStream%20NIDS/.github/workflows/deploy.yml)
+#### [DONE - CREATED] [.github/workflows/deploy.yml](file:///d:/Projects/FrostStream%20NIDS/.github/workflows/deploy.yml)
 - GitHub Actions workflow triggered on push to `main`:
   1. **Lint & Test**: Runs `flake8` and `pytest tests/`.
-  2. **AWS OIDC Authentication**: Obtains temporary short-lived AWS credentials.
-  3. **Deploy AWS Infrastructure**: `sam deploy --non-interactive` for Lambda & API Gateway.
+  2. **AWS OIDC Authentication**: Obtains temporary short-lived AWS credentials via `aws-actions/configure-aws-credentials@v4`.
+  3. **Deploy AWS Infrastructure**: `sam deploy --non-interactive` for Lambda & API Gateway (mitigator + cleanup).
   4. **Deploy Snowflake Pipelines**:
      - Uses Snowflake CLI (`snow`).
      - Executes DDL updates (`01_tables.sql`, `02_snowpipe.sql`, `03_snowpark_integration.sql`).
-     - Uploads updated model code to `@CORE.SNOWPARK_CODE_STAGE`.
-     - Deploys Streamlit-in-Snowflake app: `snow streamlit deploy`.
+     - Uploads updated model code to `@CORE.SNOWPARK_CODE_STAGE` via `tools/deploy_snowpark_code.py`.
+     - Resumes `CORE.SOAR_DISPATCH_TASK` and verifies deployment status.
+  5. **Secrets Required** (configured in GitHub repository settings):
+     - `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY` (base64-encoded RSA key)
+     - `AWS_ROLE_ARN` for OIDC federation (recommended) or `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
+     - `SNOWFLAKE_PASSWORD` (fallback if not using key-pair)
+     - `TARGET_NACL_ID`, `TARGET_VPC_ID`
+     - `SNOWFLAKE_SOAR_IAM_USER_ARN`, `SNOWFLAKE_SOAR_EXTERNAL_ID`
 
 ---
 
@@ -467,9 +473,19 @@ d:/Projects/FrostStream NIDS/
 #### [DONE] [tests/test_flow_processor.py](file:///d:/Projects/FrostStream%20NIDS/tests/test_flow_processor.py)
 - Unit tests (11 tests, no scapy required): bidirectional TCP flow aggregation (bytes, duration, flag, service), all-41-features record shape, idle/active timeout expiry, flag derivation (S0/REJ/SF), port→service mapping, `land` detection, sliding-window `count`/`serror_rate`/`same_srv_rate`, LOCAL JSON-lines sink, CLOUD Firehose `put_record` via fake client, and `--replay-sample` CLI end-to-end.
 
-#### [PARTIAL - NEEDS EXPANSION] [tests/test_models.py](file:///d:/Projects/FrostStream%20NIDS/tests/test_models.py)
-- Current: Basic model training/evaluation test ✓
-- **MISSING**: Ensemble voting, IsolationForest scoring, PSI calculation tests
+#### [DONE] [tests/test_models.py](file:///d:/Projects/FrostStream%20NIDS/tests/test_models.py)
+- Basic model training/evaluation test ✓
+- Ensemble soft voting test ✓
+- IsolationForest scoring on normal vs attack traffic ✓
+- Ensemble + IsolationForest integration inference ✓
+- PSI identical distribution (~0) test ✓
+- PSI shifted distribution detection ✓
+- PSI edge cases (empty/single bin) ✓
+- Drift report status classification (OK/ALERT) ✓
+- Drift monitor excludes synthetic traffic (SQL verification) ✓
+- score_flows output columns verification ✓
+- Baseline distribution computation structure ✓
+- Local drift monitor with perturbation ✓
 
 #### [DONE] [tests/test_soar_mitigator.py](file:///d:/Projects/FrostStream%20NIDS/tests/test_soar_mitigator.py)
 - Mocked-boto3 tests (14) verifying the external-function protocol, confidence filtering (> 0.95 → SUPPRESSED), idempotency (already-blocked → SUPPRESSED), TTL tag creation, rule-number allocation, malformed-body rejection, and the cleanup expiry/delete/tag-strip/Snowflake-writeback path.
@@ -494,10 +510,10 @@ Run unit and integration test suite via `pytest`:
 ```bash
 pytest tests/ -v
 ```
-**Current: 71 passing tests (all unit & integration tests passing in ~49s)**
+**Current: 82 passing tests (all unit & integration tests passing in ~69s)**
 - `tests/test_execution_mode.py` (17 tests)
 - `tests/test_flow_processor.py` (11 tests)
-- `tests/test_models.py` (1 test)
+- `tests/test_models.py` (12 tests)
 - `tests/test_phase1_sql.py` (7 tests)
 - `tests/test_phase2_layer.py` (8 tests)
 - `tests/test_phase3_sql.py` (7 tests)
