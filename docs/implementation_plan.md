@@ -563,3 +563,65 @@ Live deployment and verification use environment variables supplied by the deplo
 5. GitHub Actions secrets for future CI/CD:
    - `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PRIVATE_KEY`
    - `AWS_ROLE_ARN` for OIDC, or the AWS credential pair for non-OIDC deployment
+
+---
+
+## Retrain Cadence & Alert Tuning (Proposed)
+
+### Retrain Trigger Policy
+**Option A: Drift-Triggered (Recommended)**
+- Trigger `train.py` when `DRIFT_REPORTS.MAX_PSI > 0.25` for **N=3 consecutive hourly checks**
+- Rationale: avoids single-spike retraining; confirms sustained distribution shift
+- Implementation: add a `RETRIAN_TRIGGER` task or extend `DRIFT_MONITOR_TASK` to write a `retrain_pending` flag after 3 consecutive alerts
+
+**Option B: Fixed Monthly Cadence**
+- Run `train.py` on the 1st of every month via scheduled task
+- Rationale: predictable, auditable, aligns with model governance cycles
+- Can combine with Option A: retrain on drift OR monthly, whichever comes first
+
+**Decision Required**: Pick Option A, B, or hybrid. Current drift threshold (0.25) is conservative; may want to tune based on observed PSI values.
+
+### Alert Threshold Tuning Notes
+**Current State (as of 2026-09-26):**
+- `CONFIDENCE_THRESHOLD = 0.90` for alerting
+- `CRITICAL_CONFIDENCE_THRESHOLD = 0.95` for CRITICAL severity
+- `ANOMALY_THRESHOLD = -0.2` for IsolationForest zero-day detection
+- SOAR auto-dispatch only triggers at `confidence > 0.95` AND `SEVERITY IN ('CRITICAL','HIGH')`
+
+**Observed Real Traffic (39 alerts from 2 captures):**
+- 33 Normal → HIGH severity (confidence 55-95%) — high false-positive rate on "Normal" class
+- 4 DoS → MEDIUM severity (confidence ~55%) — below CRITICAL threshold
+- 2 Probe → MEDIUM severity (confidence ~62-70%)
+- 0 CRITICAL alerts generated
+
+**Action Items (Monitor for 1 week before changes):**
+1. Track false-positive rate on HIGH alerts where `ATTACK_TYPE = 'Normal'`
+2. If Normal→HIGH rate > 50%, consider:
+   - Raising `CONFIDENCE_THRESHOLD` to 0.95 for alerting
+   - Adjusting severity logic: Normal class → MEDIUM max regardless of confidence
+   - Adding minimum anomaly score gate for Normal class
+3. Monitor DoS/Probe detection confidence — may need to lower threshold for these classes
+4. Zero-day suspects: none observed; verify IsolationForest threshold (-0.2) is appropriate
+
+### Cost Optimization (Observed 2026-09-23 to 2026-09-26)
+**Warehouse Credit Burn (7 days):**
+- `NIDS_ANALYTICS_WH` (Small, 2 credits/hr): **141.8 credits** — primary cost driver
+- `NIDS_INGEST_WH` (X-Small): **0.09 credits** — negligible
+
+**Query Breakdown (7 days):**
+| Task | Runs | Avg Time | Total Compute |
+|------|------|----------|---------------|
+| `SP_RUN_NIDS_INFERENCE` (1-min schedule) | 3,182 | 2.16s | 1.9 hrs |
+| `SP_RUN_DRIFT_MONITOR` (hourly) | 97 | 1.98s | 3.2 min |
+| `SOAR_DISPATCH_TASK` (1-min, alert-gated) | 27 | 0.05s | 1.3 sec |
+| Other (dashboard, metadata) | 14,001 | 0.008s | 1.9 min |
+
+**Root Cause**: `INFERENCE_TASK` runs every minute → warehouse **never suspends** (AUTO_SUSPEND=120s). Warehouse runs ~24/7 = ~20 credits/day.
+
+**Optimization Options:**
+1. **Reduce inference frequency** to 5-min (12× fewer runs) → ~3 credits/day
+2. **Downsize warehouse** to X-Small (1 credit/hr) for inference → ~10 credits/day  
+3. **Lower AUTO_SUSPEND to 60s** + batch inference → may not help with 1-min schedule
+4. **Hybrid**: Move inference to X-Small warehouse, keep drift/SOAR on Small
+
+**Recommendation**: Option 1 (5-min schedule) + Option 2 (X-Small) = estimated **~3-4 credits/day** vs current ~20.
