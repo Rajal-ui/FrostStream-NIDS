@@ -19,7 +19,10 @@ def list_expired(acl: dict, now: int = None) -> list[tuple[str, int, dict]]:
 def expire_blocks(client, nacl_id: str, *, now: int = None,
                   snowflake_update=None) -> dict:
     acl = nacl.describe_acl(client, nacl_id)
-    expired = list_expired(acl, now)
+    now_ts = int(time.time()) if now is None else now
+
+    # Handle blocks that still have NACL entries
+    expired = list_expired(acl, now_ts)
     ips = []
     errors = []
     for ip, epoch, entry in expired:
@@ -28,6 +31,17 @@ def expire_blocks(client, nacl_id: str, *, now: int = None,
             ips.append(ip)
         except Exception as exc:  # noqa: BLE001
             errors.append({'src_ip': ip, 'error': str(exc)})
+
+    # Handle orphaned tags (NACL entry already gone but tag remains)
+    orphaned = nacl.expired_tags(acl, now_ts)
+    for ip, epoch in orphaned:
+        try:
+            nacl.delete_tag(client, nacl_id, ip)
+            if ip not in ips:
+                ips.append(ip)
+        except Exception as exc:  # noqa: BLE001
+            errors.append({'src_ip': ip, 'error': str(exc)})
+
     updated = 0
     if ips and snowflake_update is not None:
         updated = snowflake_update(ips)

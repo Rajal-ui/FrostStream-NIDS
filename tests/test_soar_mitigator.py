@@ -49,9 +49,12 @@ class FakeEc2:
         self.deleted.append({'NetworkAclId': NetworkAclId, 'RuleNumber': RuleNumber})
         self.entries = [e for e in self.entries if e['RuleNumber'] != RuleNumber]
 
-    def delete_tags(self, Resources=None, TagKeys=None):
-        self.untag_calls.append((Resources, TagKeys))
-        for key in TagKeys:
+    def delete_tags(self, Resources=None, TagKeys=None, Tags=None):
+        self.untag_calls.append((Resources, TagKeys, Tags))
+        keys = TagKeys or []
+        if Tags:
+            keys.extend([t['Key'] for t in Tags])
+        for key in keys:
             self.tags.pop(key, None)
 
 

@@ -157,6 +157,20 @@ def expired_blocks(acl: dict, now: int) -> list[tuple[str, int, dict]]:
     return expired
 
 
+def expired_tags(acl: dict, now: int) -> list[tuple[str, int]]:
+    """Return all expired TTL tags regardless of whether NACL entry exists."""
+    expired = []
+    for ip, epoch in ttl_tags(acl):
+        if epoch <= now:
+            expired.append((ip, epoch))
+    expired.sort(key=lambda item: item[1])
+    return expired
+
+
+def delete_tag(client, nacl_id: str, ip: str) -> None:
+    client.delete_tags(Resources=[nacl_id], Tags=[{'Key': ttl_tag_key(ip)}])
+
+
 def delete_block(client, nacl_id: str, ip: str, entry: dict) -> None:
     client.delete_network_acl_entry(NetworkAclId=nacl_id, Egress=False, RuleNumber=int(entry['RuleNumber']))
-    client.delete_tags(Resources=[nacl_id], TagKeys=[ttl_tag_key(ip)])
+    client.delete_tags(Resources=[nacl_id], Tags=[{'Key': ttl_tag_key(ip)}])
