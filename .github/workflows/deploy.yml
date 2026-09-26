@@ -50,8 +50,7 @@ jobs:
           flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
 
       - name: Run tests
-        run: |
-          pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short
 
   deploy-aws:
     name: Deploy AWS Infrastructure (SAM)
@@ -59,7 +58,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      mitigator-api-url: ${{ steps.api-url.outputs.MITIGATOR_API_URL }}
+      mitigator-api-url: ${{ steps.get_url.outputs.MITIGATOR_API_URL }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -76,8 +75,7 @@ jobs:
           version: '1.120.0'
 
       - name: Build SAM application
-        run: |
-          sam build --template-file infra/template.yaml
+        run: sam build --template-file infra/template.yaml
 
       - name: Deploy SAM stack
         env:
@@ -111,16 +109,16 @@ jobs:
             --resolve-s3
 
       - name: Get API Gateway URL
-        id: api-url
+        id: get_url
         run: |
           URL=$(aws cloudformation describe-stacks \
             --stack-name froststream-soar \
             --query 'Stacks[0].Outputs[?OutputKey==`MitigatorApiUrl`].OutputValue' \
             --output text)
-          echo "MITIGATOR_API_URL=$URL" >> $GITHUB_OUTPUT
+          echo "MITIGATOR_API_URL=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Output API URL
-        run: echo "Mitigator API URL: ${{ steps.api-url.outputs.MITIGATOR_API_URL }}"
+        run: 'echo "Mitigator API URL: ${{ steps.get_url.outputs.MITIGATOR_API_URL }}"'
 
   deploy-snowflake:
     name: Deploy Snowflake Objects
@@ -132,8 +130,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Snowflake CLI
-        run: |
-          pip install snowflake-cli-labs
+        run: pip install snowflake-cli-labs
 
       - name: Set up Snowflake connection
         env:
@@ -141,7 +138,7 @@ jobs:
           SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
         run: |
           mkdir -p ~/.snowflake
-          cat > ~/.snowflake/config.toml << EOF
+          cat > ~/.snowflake/config.toml << 'EOF'
           [connections.ci]
           account = "${{ env.SNOWFLAKE_ACCOUNT }}"
           user = "${{ env.SNOWFLAKE_USER }}"
@@ -169,8 +166,7 @@ jobs:
           snow sql -f snowflake_setup/verify_phase1.sql -c ci
 
       - name: Package & upload Snowpark code
-        run: |
-          python tools/deploy_snowpark_code.py --build --upload
+        run: python tools/deploy_snowpark_code.py --build --upload
 
       - name: Deploy Phase 3 (Snowpark SPROCs, external function, tasks)
         run: |
@@ -186,8 +182,7 @@ jobs:
           " -c ci
 
       - name: Resume SOAR dispatch task
-        run: |
-          snow sql -q "ALTER TASK CORE.SOAR_DISPATCH_TASK RESUME;" -c ci
+        run: snow sql -q "ALTER TASK CORE.SOAR_DISPATCH_TASK RESUME;" -c ci
 
       - name: Verify deployment
         run: |
@@ -212,18 +207,13 @@ jobs:
           echo "**AWS Stack**: froststream-soar"
           echo "**Snowflake**: ${{ env.SNOWFLAKE_ACCOUNT }}/${{ env.SNOWFLAKE_DATABASE }}.${{ env.SNOWFLAKE_SCHEMA }}"
           echo ""
-          if [ "${{ needs.deploy-aws.result }}" == "success" ]; then
-            echo "✅ AWS SAM deployment successful"
+          if [ "${{ needs.deploy-aws.result }}" = "success" ]; then
+            echo "[OK] AWS SAM deployment successful"
           else
-            echo "❌ AWS SAM deployment failed"
+            echo "[FAIL] AWS SAM deployment failed"
           fi
-          if [ "${{ needs.deploy-snowflake.result }}" == "success" ]; then
-            echo "✅ Snowflake deployment successful"
+          if [ "${{ needs.deploy-snowflake.result }}" = "success" ]; then
+            echo "[OK] Snowflake deployment successful"
           else
-            echo "❌ Snowflake deployment failed"
-          fi
-          if [ "${{ needs.deploy-snowflake.result }}" == "success" ]; then
-            echo "✅ Snowflake deployment successful"
-          else
-            echo "❌ Snowflake deployment failed"
+            echo "[FAIL] Snowflake deployment failed"
           fi
