@@ -68,4 +68,4 @@ infra/.aws-sam/
 *.bak
 *.corrupted
 
-docs/
+docs/docs/
