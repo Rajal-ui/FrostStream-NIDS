@@ -7,12 +7,6 @@ The project has two deliberately separate operating modes:
 - **LOCAL** — Scapy capture or offline replay, local model artifacts, JSONL flow output, and a SQLite alert store. This is the best starting point for development and evaluation.
 - **CLOUD** — the flow processor sends records to Kinesis Data Firehose, Snowflake loads them through Snowpipe, Snowpark procedures score and monitor them, and an optional SOAR path can call an API Gateway/Lambda function to create a temporary NACL deny rule.
 
-## Documentation
-
-- [Project Documentation](PROJECT_DOCUMENTATION.md) — beginner-friendly technical handbook.
-- [Project Master Document](docs/NIDS-SecOps%20Project%20Master%20Document.md) — public architecture, scope, governance, and delivery overview.
-- [Testing, Running, AWS, and Snowflake Guide](docs/TESTING_RUNNING_AWS_SNOWFLAKE_GUIDE.md) — practical setup, deployment, verification, and troubleshooting instructions.
-
 ## What the system detects
 
 The current model maps labeled NSL-KDD attacks to five macro-classes:
