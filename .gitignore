@@ -68,4 +68,7 @@ infra/.aws-sam/
 *.bak
 *.corrupted
 
-docs/
+docs/private
+docs/CRITICAL_PATH_VALIDATION_PLAN.md
+docs/implementation_plan.md
+docs/NIDS-SecOps Project Master Document.md
