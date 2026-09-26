@@ -1,0 +1,219 @@
+name: FrostStream NIDS - Deploy to Production
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+  SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+  SNOWFLAKE_ROLE: ACCOUNTADMIN
+  SNOWFLAKE_DATABASE: FROSTSTREAM_NIDS
+  SNOWFLAKE_SCHEMA: CORE
+  SNOWFLAKE_WAREHOUSE: NIDS_ANALYTICS_WH
+  NACL_RULE_START: 100
+  NACL_RULE_END: 199
+  BLOCK_TTL_HOURS: 24
+
+jobs:
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pytest
+
+      - name: Lint with flake8
+        run: |
+          flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  deploy-aws:
+    name: Deploy AWS Infrastructure (SAM)
+    needs: lint-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      mitigator-api-url: ${{ steps.get_url.outputs.MITIGATOR_API_URL }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          version: '1.120.0'
+
+      - name: Build SAM application
+        run: sam build --template-file infra/template.yaml
+
+      - name: Deploy SAM stack
+        env:
+          TARGET_NACL_ID: ${{ secrets.TARGET_NACL_ID }}
+          TARGET_VPC_ID: ${{ secrets.TARGET_VPC_ID }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_SOAR_IAM_USER_ARN: ${{ secrets.SNOWFLAKE_SOAR_IAM_USER_ARN }}
+          SNOWFLAKE_SOAR_EXTERNAL_ID: ${{ secrets.SNOWFLAKE_SOAR_EXTERNAL_ID }}
+        run: |
+          sam deploy \
+            --template-file .aws-sam/build/template.yaml \
+            --stack-name froststream-soar \
+            --parameter-overrides \
+              TargetNaclId=${TARGET_NACL_ID} \
+              TargetVpcId=${TARGET_VPC_ID} \
+              NaclRuleStart=${{ env.NACL_RULE_START }} \
+              NaclRuleEnd=${{ env.NACL_RULE_END }} \
+              BlockTtlHours=${{ env.BLOCK_TTL_HOURS }} \
+              SnowflakeAccount=${{ env.SNOWFLAKE_ACCOUNT }} \
+              SnowflakeUser=${{ env.SNOWFLAKE_USER }} \
+              SnowflakePassword=${SNOWFLAKE_PASSWORD} \
+              SnowflakeRole=${{ env.SNOWFLAKE_ROLE }} \
+              SnowflakeDatabase=${{ env.SNOWFLAKE_DATABASE }} \
+              SnowflakeSchema=${{ env.SNOWFLAKE_SCHEMA }} \
+              SnowflakeWarehouse=${{ env.SNOWFLAKE_WAREHOUSE }} \
+              SnowflakeIamUserArn=${SNOWFLAKE_SOAR_IAM_USER_ARN} \
+              SnowflakeExternalId=${SNOWFLAKE_SOAR_EXTERNAL_ID} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --region ${{ env.AWS_REGION }} \
+            --resolve-s3
+
+      - name: Get API Gateway URL
+        id: get_url
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name froststream-soar \
+            --query 'Stacks[0].Outputs[?OutputKey==`MitigatorApiUrl`].OutputValue' \
+            --output text)
+          echo "MITIGATOR_API_URL=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Output API URL
+        run: 'echo "Mitigator API URL: ${{ steps.get_url.outputs.MITIGATOR_API_URL }}"'
+
+  deploy-snowflake:
+    name: Deploy Snowflake Objects
+    needs: lint-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Snowflake CLI
+        run: pip install snowflake-cli-labs
+
+      - name: Set up Snowflake connection
+        env:
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: |
+          mkdir -p ~/.snowflake
+          cat > ~/.snowflake/config.toml << 'EOF'
+          [connections.ci]
+          account = "${{ env.SNOWFLAKE_ACCOUNT }}"
+          user = "${{ env.SNOWFLAKE_USER }}"
+          role = "${{ env.SNOWFLAKE_ROLE }}"
+          database = "${{ env.SNOWFLAKE_DATABASE }}"
+          schema = "${{ env.SNOWFLAKE_SCHEMA }}"
+          warehouse = "${{ env.SNOWFLAKE_WAREHOUSE }}"
+          EOF
+
+          if [ -n "${SNOWFLAKE_PRIVATE_KEY}" ]; then
+            echo "${SNOWFLAKE_PRIVATE_KEY}" | base64 -d > "${{ runner.temp }}/rsa_key.p8"
+            chmod 600 "${{ runner.temp }}/rsa_key.p8"
+            echo 'private_key_path = "${{ runner.temp }}/rsa_key.p8"' >> ~/.snowflake/config.toml
+          elif [ -n "${SNOWFLAKE_PASSWORD}" ]; then
+            echo "password = \"${SNOWFLAKE_PASSWORD}\"" >> ~/.snowflake/config.toml
+          else
+            echo "ERROR: Neither SNOWFLAKE_PRIVATE_KEY nor SNOWFLAKE_PASSWORD provided"
+            exit 1
+          fi
+
+      - name: Deploy Phase 1 DDL (tables, stages, snowpipe)
+        run: |
+          snow sql -f snowflake_setup/01_tables.sql -c ci
+          snow sql -f snowflake_setup/02_snowpipe.sql -c ci
+          snow sql -f snowflake_setup/verify_phase1.sql -c ci
+
+      - name: Package & upload Snowpark code
+        run: python tools/deploy_snowpark_code.py --build --upload
+
+      - name: Deploy Phase 3 (Snowpark SPROCs, external function, tasks)
+        run: |
+          snow sql -f snowflake_setup/03_snowpark_integration.sql -c ci
+          snow sql -f snowflake_setup/verify_phase3.sql -c ci
+
+      - name: Update External Function URL (if changed)
+        if: needs.deploy-aws.outputs.mitigator-api-url != ''
+        run: |
+          snow sql -q "
+            ALTER EXTERNAL FUNCTION CORE.EXTERNAL_MITIGATE_IP(SRC_IP VARCHAR, ALERT_ID VARCHAR, CONFIDENCE FLOAT, ATTACK_TYPE VARCHAR)
+            SET API_INTEGRATION = SOAR_API_INTEGRATION AS '${{ needs.deploy-aws.outputs.mitigator-api-url }}';
+          " -c ci
+
+      - name: Resume SOAR dispatch task
+        run: snow sql -q "ALTER TASK CORE.SOAR_DISPATCH_TASK RESUME;" -c ci
+
+      - name: Verify deployment
+        run: |
+          snow sql -q "
+            SELECT SYSTEM\$PIPE_STATUS('CORE.PIPE_RAW_FLOW') as pipe_status;
+            SHOW TASKS LIKE '%INFERENCE%' IN ACCOUNT;
+            SHOW TASKS LIKE '%DRIFT%' IN ACCOUNT;
+            SHOW TASKS LIKE '%SOAR%' IN ACCOUNT;
+          " -c ci
+
+  notify:
+    name: Deployment Summary
+    needs: [deploy-aws, deploy-snowflake]
+    runs-on: ubuntu-latest
+    if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    steps:
+      - name: Summary
+        run: |
+          echo "## FrostStream NIDS Deployment Summary"
+          echo ""
+          echo "**Status**: ${{ job.status }}"
+          echo "**AWS Stack**: froststream-soar"
+          echo "**Snowflake**: ${{ env.SNOWFLAKE_ACCOUNT }}/${{ env.SNOWFLAKE_DATABASE }}.${{ env.SNOWFLAKE_SCHEMA }}"
+          echo ""
+          if [ "${{ needs.deploy-aws.result }}" = "success" ]; then
+            echo "[OK] AWS SAM deployment successful"
+          else
+            echo "[FAIL] AWS SAM deployment failed"
+          fi
+          if [ "${{ needs.deploy-snowflake.result }}" = "success" ]; then
+            echo "[OK] Snowflake deployment successful"
+          else
+            echo "[FAIL] Snowflake deployment failed"
+          fi

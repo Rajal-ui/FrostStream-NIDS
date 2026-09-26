@@ -7,31 +7,40 @@ USE DATABASE FROSTSTREAM_NIDS;
 USE SCHEMA CORE;
 
 -- -----------------------------------------------------------------------------
--- 1. AWS Storage Integration for S3 Landing Bucket
+-- 1. AWS Access-Key Stage for S3 Landing Bucket
 -- -----------------------------------------------------------------------------
--- NOTE: Replace <AWS_ACCOUNT_ID> and <S3_BUCKET_NAME> with actual values
--- Run this once, then copy the STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID
--- to configure the S3 bucket policy in AWS
-CREATE OR REPLACE STORAGE INTEGRATION S3_FLOW_INTEGRATION
-  TYPE = EXTERNAL_STAGE
-  STORAGE_PROVIDER = 'S3'
-  ENABLED = TRUE
-  STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::<AWS_ACCOUNT_ID>:role/SnowflakeFlowLogsRole'
-  STORAGE_ALLOWED_LOCATIONS = ('s3://<S3_BUCKET_NAME>/flows/')
-  COMMENT = 'Integration for Kinesis Firehose -> S3 -> Snowpipe flow ingestion';
-
--- DESCRIBE INTEGRATION S3_FLOW_INTEGRATION;
--- ^ After running, copy STORAGE_AWS_IAM_USER_ARN and STORAGE_AWS_EXTERNAL_ID
---   Configure S3 bucket policy to allow Snowflake IAM user PutObject on the bucket
+-- OPTION B (current): IAM access keys in the stage (no storage integration).
+-- The AWS account blocks cross-account sts:AssumeRole from Snowflake's IAM user,
+-- so the role-based flow (OPTION A) cannot be used until that is resolved.
+-- Tokens <AWS_INGEST_ACCESS_KEY_ID> / <AWS_INGEST_SECRET_ACCESS_KEY> are injected
+-- by tools/deploy_cloud.py from .env and refer to the dedicated low-privilege
+-- IAM user 'froststream_ingest' (S3 read-only on the landing bucket).
+--
+-- OPTION A (future, preferred): restore a storage integration. Uncomment when
+-- cross-account AssumeRole is allowed, then recreate the stage with:
+--
+--   CREATE STORAGE INTEGRATION IF NOT EXISTS S3_FLOW_INTEGRATION
+--     TYPE = EXTERNAL_STAGE
+--     STORAGE_PROVIDER = 'S3'
+--     ENABLED = TRUE
+--     STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::<AWS_ACCOUNT_ID>:role/SnowflakeFlowLogsRole'
+--     STORAGE_ALLOWED_LOCATIONS = ('s3://<S3_BUCKET_NAME>/flows/')
+--     COMMENT = 'Integration for Kinesis Firehose -> S3 -> Snowpipe flow ingestion';
+--
+--   CREATE OR REPLACE STAGE S3_FLOW_STAGE
+--     STORAGE_INTEGRATION = S3_FLOW_INTEGRATION
+--     URL = 's3://<S3_BUCKET_NAME>/flows/'
+--     FILE_FORMAT = (TYPE = 'JSON' STRIP_OUTER_ARRAY = TRUE)
+--     COMMENT = 'External stage for raw flow logs in S3 (JSON lines format)';
 
 -- -----------------------------------------------------------------------------
--- 2. External Stage pointing to S3 Landing Bucket
+-- 2. External Stage pointing to S3 Landing Bucket (credential-based)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE STAGE S3_FLOW_STAGE
-  STORAGE_INTEGRATION = S3_FLOW_INTEGRATION
+  CREDENTIALS = (AWS_KEY_ID = '<AWS_INGEST_ACCESS_KEY_ID>' AWS_SECRET_KEY = '<AWS_INGEST_SECRET_ACCESS_KEY>')
   URL = 's3://<S3_BUCKET_NAME>/flows/'
   FILE_FORMAT = (TYPE = 'JSON' STRIP_OUTER_ARRAY = TRUE)
-  COMMENT = 'External stage for raw flow logs in S3 (JSON lines format)';
+  COMMENT = 'External stage for raw flow logs in S3 (JSON lines format, IAM access keys)';
 
 -- -----------------------------------------------------------------------------
 -- 3. Snowpipe: Continuous Auto-Ingest from S3 Event Notifications
@@ -40,11 +49,12 @@ CREATE OR REPLACE STAGE S3_FLOW_STAGE
 -- See: https://docs.snowflake.com/en/user-guide/data-load-snowpipe-auto-s3
 CREATE OR REPLACE PIPE PIPE_RAW_FLOW
   AUTO_INGEST = TRUE
+  COMMENT = 'Auto-ingest pipe: S3 JSON lines -> RAW_FLOW_LANDING table'
   AS
   COPY INTO RAW_FLOW_LANDING (RAW_ID, INGESTION_TIMESTAMP, RECORD_CONTENT, FILE_NAME, FILE_ROW_NUMBER)
   FROM (
     SELECT
-      METADATA$FILENAME || '_' || METADATA$FILE_ROW_NUMBER,
+      MD5(METADATA$FILENAME || '_' || METADATA$FILE_ROW_NUMBER),
       CURRENT_TIMESTAMP(),
       $1,
       METADATA$FILENAME,
@@ -52,8 +62,7 @@ CREATE OR REPLACE PIPE PIPE_RAW_FLOW
     FROM @S3_FLOW_STAGE
   )
   FILE_FORMAT = (TYPE = 'JSON' STRIP_OUTER_ARRAY = TRUE)
-  ON_ERROR = 'CONTINUE'
-  COMMENT = 'Auto-ingest pipe: S3 JSON lines -> RAW_FLOW_LANDING table';
+  ON_ERROR = 'CONTINUE';
 
 -- Check pipe status
 -- SHOW PIPES LIKE 'PIPE_RAW_FLOW';
@@ -89,14 +98,20 @@ CREATE OR REPLACE TASK FLATTEN_FLOW_TASK
     DST_HOST_SAME_SRC_PORT_RATE, DST_HOST_SRV_DIFF_HOST_RATE,
     DST_HOST_SERROR_RATE, DST_HOST_SRV_SERROR_RATE, DST_HOST_RERROR_RATE,
     DST_HOST_SRV_RERROR_RATE,
-    PROCESSED_FLAG, CREATED_AT
+    IS_SYNTHETIC, PROCESSED_FLAG, CREATED_AT
   )
   SELECT
-    -- Generate deterministic FLOW_ID from 5-tuple + timestamp
-    MD5(COALESCE(src_record:flow_id::VARCHAR, 
-           src_record:src_ip::VARCHAR || ':' || src_record:dst_ip::VARCHAR || ':' ||
-           src_record:src_port::VARCHAR || ':' || src_record:dst_port::VARCHAR || ':' ||
-           src_record:protocol::VARCHAR || ':' || src_record:timestamp::VARCHAR)) AS FLOW_ID,
+    -- Generate deterministic FLOW_ID from 5-tuple + timestamp (fall back to raw file identity)
+    MD5(COALESCE(
+      src_record:flow_id::VARCHAR,
+      COALESCE(src_record:src_ip::VARCHAR, '') || '|' ||
+      COALESCE(src_record:dst_ip::VARCHAR, '') || '|' ||
+      COALESCE(src_record:src_port::VARCHAR, '') || '|' ||
+      COALESCE(src_record:dst_port::VARCHAR, '') || '|' ||
+      COALESCE(src_record:protocol::VARCHAR, '') || '|' ||
+      COALESCE(src_record:flow_start_time::VARCHAR, src_record:timestamp::VARCHAR, RAW_ID::VARCHAR),
+      RAW_ID || ':' || COALESCE(flow_index::VARCHAR, '0')
+    )) AS FLOW_ID,
     
     src_record:src_ip::VARCHAR AS SRC_IP,
     src_record:dst_ip::VARCHAR AS DST_IP,
@@ -146,11 +161,27 @@ CREATE OR REPLACE TASK FLATTEN_FLOW_TASK
     COALESCE(src_record:dst_host_srv_serror_rate::FLOAT, 0.0) AS DST_HOST_SRV_SERROR_RATE,
     COALESCE(src_record:dst_host_rerror_rate::FLOAT, 0.0) AS DST_HOST_RERROR_RATE,
     COALESCE(src_record:dst_host_srv_rerror_rate::FLOAT, 0.0) AS DST_HOST_SRV_RERROR_RATE,
+
+    COALESCE(FILE_NAME ILIKE 'flows/smoke_%', FALSE)
+      OR COALESCE(src_record:flow_id::VARCHAR ILIKE 'smoke-%', FALSE) AS IS_SYNTHETIC,
     
     FALSE AS PROCESSED_FLAG,
     CURRENT_TIMESTAMP() AS CREATED_AT
-  FROM RAW_FLOW_STREAM,
-  LATERAL FLATTEN(INPUT => RECORD_CONTENT) AS src_record;
+  FROM (
+    -- Normalize each landing record into a single flow object:
+    --  * Direct JSON-object row        -> src_record = RECORD_CONTENT
+    --  * Firehose envelope             -> src_record = f.value from array under 'records'
+    -- LATERAL FLATTEN over a plain OBJECT yields one row per key (not per flow), so we
+    -- flatten on PATH => 'records' with OUTER => TRUE to keep exactly one row per record.
+    SELECT
+      RAW_ID,
+      FILE_NAME,
+      COALESCE(f.value, RECORD_CONTENT) AS src_record,
+      f.index AS flow_index
+    FROM RAW_FLOW_STREAM,
+      LATERAL FLATTEN(INPUT => RECORD_CONTENT, PATH => 'records', OUTER => TRUE) AS f
+    WHERE COALESCE(f.value, RECORD_CONTENT) IS NOT NULL
+  );
 
 -- Resume the task (tasks are suspended by default)
 ALTER TASK FLATTEN_FLOW_TASK RESUME;
@@ -167,12 +198,14 @@ CREATE OR REPLACE STREAM FLOW_FEATURES_STREAM
 -- after the SPROC SP_RUN_NIDS_INFERENCE is registered.
 
 -- =============================================================================
--- Deployment Notes:
+-- Deployment Notes (Phase 1):
 -- =============================================================================
 -- 1. Create S3 bucket for flow logs (e.g., froststream-nids-flows-<account>-<region>)
--- 2. Create IAM role 'SnowflakeFlowLogsRole' with trust policy for Snowflake
--- 3. Attach policy allowing s3:PutObject on the bucket
--- 4. Configure S3 Event Notification: s3:ObjectCreated:* -> SQS queue
+-- 2. Create IAM user 'froststream_ingest' (programmatic) with S3 read-only on the
+--    bucket and its objects (s3:ListBucket, s3:GetObject, s3:GetBucketLocation)
+-- 3. Store its keys as AWS_INGEST_ACCESS_KEY_ID / AWS_INGEST_SECRET_ACCESS_KEY in .env
+-- 4. Configure S3 Event Notification: s3:ObjectCreated:* -> pipe's SQS queue
+--    (tools/provision_aws.py --notify-only)
 -- 5. Create Snowpipe auto-ingest: ALTER PIPE PIPE_RAW_FLOW SET PIPE_EXECUTION_PAUSED = FALSE;
 -- 6. Verify: SELECT * FROM TABLE(INFORMATION_SCHEMA.COPY_HISTORY(TABLE_NAME=>'RAW_FLOW_LANDING'));
 -- =============================================================================
