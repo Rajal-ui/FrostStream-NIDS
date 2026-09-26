@@ -109,6 +109,30 @@ Launch the local Streamlit dashboard after training artifacts exist:
 streamlit run app.py
 ```
 
+## Cloud quick start
+
+Deploy the AWS SOAR stack and Snowflake objects:
+
+```powershell
+# 1. Configure credentials in .env (see .env.example)
+# 2. Deploy AWS SAM stack (Lambda + API Gateway)
+sam build --template-file infra/template.yaml
+sam deploy --stack-name froststream-soar --parameter-overrides TargetNaclId=acl-xxx TargetVpcId=vpc-xxx ...
+
+# 3. Deploy Snowflake DDL, stages, Snowpipe
+snow sql -f snowflake_setup/01_tables.sql -c <conn>
+snow sql -f snowflake_setup/02_snowpipe.sql -c <conn>
+
+# 4. Package & upload Snowpark code
+python tools/deploy_snowpark_code.py --build --upload
+
+# 5. Deploy SPROCs, external function, tasks
+snow sql -f snowflake_setup/03_snowpark_integration.sql -c <conn>
+
+# 6. Start tasks
+snow sql -q "ALTER TASK CORE.FLATTEN_FLOW_TASK RESUME; ALTER TASK CORE.INFERENCE_TASK RESUME; ALTER TASK CORE.DRIFT_MONITOR_TASK RESUME; ALTER TASK CORE.SOAR_DISPATCH_TASK RESUME;" -c <conn>
+```
+
 ## Test and validate
 
 Run the complete automated suite from the repository root:
@@ -117,9 +141,7 @@ Run the complete automated suite from the repository root:
 pytest tests/ -v
 ```
 
-The current validation baseline is 71 passing tests. The suite covers preprocessing, flow aggregation, dual-mode factories, model behavior, SQL structure, mitigation idempotency, and mocked real-capture end-to-end paths.
-
-For cloud verification, follow the dedicated guide rather than copying local commands. Cloud checks require an AWS account, a Snowflake account, a configured S3 landing bucket, a Firehose delivery stream, model artifacts, and appropriate IAM permissions.
+**Current baseline: 82 passing tests.** The suite covers preprocessing, flow aggregation, dual-mode factories, model behavior (ensemble voting, IsolationForest, PSI drift), SQL structure, mitigation idempotency, and mocked real-capture end-to-end paths.
 
 ## Repository map
 
@@ -136,9 +158,21 @@ For cloud verification, follow the dedicated guide rather than copying local com
 ├── infra/template.yaml            AWS SAM template for the SOAR stack
 ├── tools/                         Provisioning, packaging, smoke, and check scripts
 ├── tests/                         Automated unit, SQL, SOAR, and E2E tests
-├── PROJECT_DOCUMENTATION.md       Technical handbook
-└── docs/                          Public PMD and operations guide
+├── docs/                          Public PMD, implementation plan, operations guide
+├── .github/workflows/deploy.yml   GitHub Actions CI/CD (lint/test + SAM + Snowflake)
+├── streamlit_app/sis_dashboard.py SiS operational dashboard (real Snowflake queries)
+└── README.md
 ```
+
+## Key documentation
+
+| File | Purpose |
+|------|---------|
+| `docs/implementation_plan.md` | End-to-end plan with live status, retrain/cost docs |
+| `docs/CRITICAL_PATH_VALIDATION_PLAN.md` | Draft plan for DoS/U2R CRITICAL test (requires approval) |
+| `docs/TESTING_RUNNING_AWS_SNOWFLAKE_GUIDE.md` | Practical setup, deployment, verification, troubleshooting |
+| `docs/design.md` | Dashboard design specification |
+| `docs/NIDS-SecOps Project Master Document.md` | Architecture, scope, governance, delivery overview |
 
 ## Security and data handling
 
@@ -147,6 +181,22 @@ For cloud verification, follow the dedicated guide rather than copying local com
 - Synthetic records are explicitly marked with `IS_SYNTHETIC`; use `CORE.LIVE_FLOW_FEATURES` and `CORE.LIVE_NIDS_ALERTS` for real-traffic reporting.
 - The default SOAR response creates a `/32` ingress deny rule in the managed rule range and records a TTL tag. Review rule ranges, NACL placement, and emergency rollback procedures before production use.
 - This is an engineering and research implementation, not a certified replacement for a production IDS, SIEM, or incident-response process.
+
+## Current implementation status (as of 2026-09-26)
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 0 | Core ML, dual-mode factory, local dashboard | ✅ DONE |
+| 1 | Snowflake DDL, Snowpipe, streams, tasks | ✅ LIVE - VERIFIED |
+| 2 | Ensemble + IsolationForest + PSI drift | ✅ DONE |
+| 3 | Snowpark SPROCs, external function, orchestration | ✅ LIVE - VERIFIED |
+| 4 | Scapy ingestion (bidirectional, dual-mode) | ✅ LIVE - VERIFIED |
+| 5 | SOAR Lambda + API Gateway + 24h TTL cleanup | ✅ LIVE - VERIFIED (expiry validated 2026-09-26) |
+| 6 | SiS Dashboard (real queries only) | ✅ DONE |
+| 7 | CI/CD GitHub Actions | ✅ DONE |
+| 8 | Test suite (82 tests) | ✅ DONE |
+
+**All 82 tests passing.** Two live Scapy captures (39 real flows) validated end-to-end. SOAR ACTIONED → SUPPRESSED → EXPIRED lifecycle confirmed. CRITICAL-path test plan drafted (requires approval).
 
 ## Known boundaries
 
