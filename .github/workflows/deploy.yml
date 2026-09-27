@@ -147,6 +147,7 @@ jobs:
           schema = "${{ env.SNOWFLAKE_SCHEMA }}"
           warehouse = "${{ env.SNOWFLAKE_WAREHOUSE }}"
           EOF
+          chmod 600 ~/.snowflake/config.toml
 
           if [ -n "${SNOWFLAKE_PRIVATE_KEY}" ]; then
             echo "${SNOWFLAKE_PRIVATE_KEY}" | base64 -d > "${{ runner.temp }}/rsa_key.p8"

@@ -1,8 +1,8 @@
-"""FrostStream NIDS - SiS Operational Dashboard (Real Data Only)
+"""FrostStream NIDS - SiS Operational Dashboard
 
 Live queries against Snowflake CORE.NIDS_ALERTS, CORE.FLOW_FEATURES, CORE.DRIFT_REPORTS.
 All queries filtered WHERE IS_SYNTHETIC = FALSE by default.
-Dual-mode: Snowflake live + local offline fallback.
+Dual-mode: Snowflake live + local/demo fallback for Streamlit Cloud.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+
+from .demo_data import get_demo_or_local_data
 
 
 # =============================================================================
@@ -107,8 +109,9 @@ def _exec_sql(session, sql: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_kpis() -> Dict[str, Any]:
-    """KPI metrics from live tables."""
+    """KPI metrics from live tables or demo data."""
     session = get_snowflake_session()
     if session:
         try:
@@ -125,8 +128,7 @@ def fetch_kpis() -> Dict[str, Any]:
                 "SELECT COUNT(*) FROM CORE.NIDS_ALERTS WHERE SEVERITY = 'HIGH' AND IS_SYNTHETIC = FALSE"
             ).collect()[0][0]
 
-            # Active NACL blocks: join alerts with current TTL tags from NACL (via cleanup lambda state)
-            # Since NACL tags are in AWS, we approximate from alerts with ACTIONED status that aren't EXPIRED
+            # Active NACL blocks
             actioned = session.sql(
                 """SELECT COUNT(DISTINCT SRC_IP) FROM CORE.NIDS_ALERTS 
                    WHERE MITIGATION_STATUS = 'ACTIONED' AND IS_SYNTHETIC = FALSE"""
@@ -166,16 +168,15 @@ def fetch_kpis() -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Local fallback (from SQLite/CSV if available)
-    return {
-        "total_alerts": 0, "critical": 0, "high": 0, "active_blocks": 0,
-        "synthetic_alerts": 0, "max_psi": 0.0, "drift_status": "OK",
-        "drift_ts": None, "cloud_live": False,
-    }
+    # Fallback to demo/local data
+    demo = get_demo_or_local_data()
+    kpis = demo["kpis"]
+    kpis["cloud_live"] = False
+    return kpis
 
 
 def fetch_alerts_by_classification() -> pd.DataFrame:
-    """Real GROUP BY ATTACK_TYPE on non-synthetic alerts."""
+    """Real GROUP BY ATTACK_TYPE on non-synthetic alerts, or demo data."""
     session = get_snowflake_session()
     if session:
         df = _exec_sql(session, """
@@ -187,11 +188,14 @@ def fetch_alerts_by_classification() -> pd.DataFrame:
         """)
         if not df.empty:
             return df
-    return pd.DataFrame({"classification": [], "count": []})
+    
+    # Fallback to demo data
+    demo = get_demo_or_local_data()
+    return demo["classification_df"]
 
 
 def fetch_alert_timeline(hours: int = 72) -> pd.DataFrame:
-    """Real timeline grouped by hour on ALERT_TS (TIMESTAMP column)."""
+    """Real timeline grouped by hour on ALERT_TS (TIMESTAMP column), or demo data."""
     session = get_snowflake_session()
     if session:
         df = _exec_sql(session, f"""
@@ -208,11 +212,14 @@ def fetch_alert_timeline(hours: int = 72) -> pd.DataFrame:
         if not df.empty:
             df["hour_bucket"] = pd.to_datetime(df["hour_bucket"])
             return df
-    return pd.DataFrame({"hour_bucket": [], "classification": [], "count": []})
+    
+    # Fallback to demo data
+    demo = get_demo_or_local_data()
+    return demo["timeline_df"]
 
 
 def fetch_threat_stream(limit: int = 100) -> pd.DataFrame:
-    """Live threat rows for the table."""
+    """Live threat rows for the table, or demo data."""
     session = get_snowflake_session()
     if session:
         df = _exec_sql(session, f"""
@@ -232,11 +239,14 @@ def fetch_threat_stream(limit: int = 100) -> pd.DataFrame:
                     lambda v: float(v) * 100 if float(v) <= 1.0 else float(v)
                 )
             return df
-    return pd.DataFrame()
+    
+    # Fallback to demo data
+    demo = get_demo_or_local_data()
+    return demo["threat_df"].head(limit)
 
 
 def fetch_soar_active_blocks() -> pd.DataFrame:
-    """Currently active NACL blocks with TTL info.
+    """Currently active NACL blocks with TTL info, or demo data.
     Since TTL tags live in AWS, we derive from alerts with ACTIONED status
     that haven't been marked EXPIRED. For TTL we use MITIGATED_AT + 24h.
     """
@@ -260,11 +270,14 @@ def fetch_soar_active_blocks() -> pd.DataFrame:
             df["expires_at"] = df["mitigated_at"] + pd.Timedelta(hours=24)
             df["ttl_remaining"] = df["expires_at"] - pd.Timestamp.now(tz="UTC")
             return df
-    return pd.DataFrame()
+    
+    # Fallback to demo data
+    demo = get_demo_or_local_data()
+    return demo["soar_df"]
 
 
 def fetch_latest_drift() -> Dict[str, Any]:
-    """Latest drift report details."""
+    """Latest drift report details, or demo data."""
     session = get_snowflake_session()
     if session:
         df = _exec_sql(session, """
@@ -282,7 +295,10 @@ def fetch_latest_drift() -> Dict[str, Any]:
                 "drifted_features": row["drifted_features"],
                 "feature_psi_details": row["feature_psi_details"],
             }
-    return {"max_psi": 0.0, "status": "OK", "check_ts": None, "drifted_features": {}, "feature_psi_details": {}}
+    
+    # Fallback to demo data
+    demo = get_demo_or_local_data()
+    return demo["drift"]
 
 
 def render_risk_bar(confidence: float) -> str:
