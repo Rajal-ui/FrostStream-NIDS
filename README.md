@@ -169,7 +169,7 @@ pytest tests/ -v
 | File | Purpose |
 |------|---------|
 | `docs/TESTING_RUNNING_AWS_SNOWFLAKE_GUIDE.md` | Practical setup, deployment, verification, troubleshooting |
-| `docs/arch,png` | Architecture overview |
+| `docs/arch.png` | Architecture overview |
 
 ## Security and data handling
 
