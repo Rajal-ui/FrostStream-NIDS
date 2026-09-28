@@ -168,11 +168,8 @@ pytest tests/ -v
 
 | File | Purpose |
 |------|---------|
-| `docs/implementation_plan.md` | End-to-end plan with live status, retrain/cost docs |
-| `docs/CRITICAL_PATH_VALIDATION_PLAN.md` | Draft plan for DoS/U2R CRITICAL test (requires approval) |
 | `docs/TESTING_RUNNING_AWS_SNOWFLAKE_GUIDE.md` | Practical setup, deployment, verification, troubleshooting |
-| `docs/design.md` | Dashboard design specification |
-| `docs/NIDS-SecOps Project Master Document.md` | Architecture, scope, governance, delivery overview |
+| `docs/arch,png` | Architecture overview |
 
 ## Security and data handling
 
